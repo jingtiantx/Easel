@@ -410,7 +410,8 @@ def test_channels_qr_waits_for_iframe_image_pixels_before_screenshot(tmp_path, m
     page.main_frame = object()
     frame = SimpleNamespace(
         url="https://open.weixin.qq.com/connect/qrconnect",
-        wait_for_selector=Mock(side_effect=lambda *args, **kwargs: order.append("image_attached")),
+        wait_for_selector=Mock(side_effect=lambda *args, **kwargs: order.append("login_visible")),
+        query_selector_all=Mock(return_value=[]),
         wait_for_function=Mock(side_effect=lambda *args, **kwargs: order.append("image_loaded")),
     )
     page.frames = [frame]
@@ -420,9 +421,39 @@ def test_channels_qr_waits_for_iframe_image_pixels_before_screenshot(tmp_path, m
     page.query_selector.return_value = image
     monkeypatch.setattr(login_qr, "save_qr", lambda *args, **kwargs: True)
     web_publisher._capture_qr(page, tmp_path / "qr.png", web_publisher.PLATFORMS["weixin-channels"])
-    assert order == ["image_attached", "image_loaded", "screenshot"]
+    assert order == ["login_visible", "image_loaded", "screenshot"]
     assert frame.wait_for_function.call_args.kwargs["timeout"] == 15000
     assert page.wait_for_selector.call_args.kwargs["timeout"] == 30000
+
+
+@pytest.mark.parametrize("quick_login", [False, True])
+def test_channels_switches_only_visible_quick_login_before_capturing_qr(
+        tmp_path, monkeypatch, quick_login):
+    order = []
+    hidden = SimpleNamespace(is_visible=lambda: False, click=Mock())
+    switch = SimpleNamespace(
+        is_visible=lambda: quick_login,
+        click=Mock(side_effect=lambda **kwargs: order.append("switch")),
+    )
+    frame = SimpleNamespace(
+        url="https://open.weixin.qq.com/connect/qrconnect",
+        wait_for_selector=Mock(), query_selector_all=Mock(return_value=[hidden, switch]),
+        wait_for_function=Mock(side_effect=lambda *args, **kwargs: order.append("loaded")),
+    )
+    page = account_page("https://channels.weixin.qq.com/login.html")
+    page.main_frame = object()
+    page.frames = [frame]
+    page.query_selector.return_value = SimpleNamespace(
+        is_visible=lambda: True,
+        screenshot=Mock(side_effect=lambda **kwargs: order.append("capture") or b"pixels"),
+    )
+    monkeypatch.setattr(login_qr, "save_qr", lambda *args, **kwargs: True)
+
+    web_publisher._capture_qr(page, tmp_path / "qr.png", web_publisher.PLATFORMS["weixin-channels"])
+
+    assert order == (["switch", "loaded", "capture"] if quick_login else ["loaded", "capture"])
+    hidden.click.assert_not_called()
+    assert switch.click.call_count == int(quick_login)
 
 
 @pytest.mark.parametrize("terminate", [False, True])

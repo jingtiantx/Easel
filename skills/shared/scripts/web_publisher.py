@@ -1221,23 +1221,30 @@ def _capture_qr(page, qr_out, cfg) -> None:
     if ifr:
         try:
             page.wait_for_selector(ifr, timeout=cfg.get("login_qr_iframe_timeout_ms", 15000), state="visible")
-            # 等 iframe 内二维码 img attach（跨域 frame 里 img 的 visible 判定不稳，用 attached 兜底）
-            for fr in page.frames:
-                if fr != page.main_frame and "qrconnect" in (fr.url or ""):
-                    try:
-                        fr.wait_for_selector(
-                            "img.js_qrcode_img, img.web_qrcode_img, img[src*='/connect/qrcode/']",
-                            timeout=10000, state="attached")
-                        fr.wait_for_function("""() => {
-                            const image = document.querySelector(
-                                "img.js_qrcode_img, img.web_qrcode_img, img[src*='/connect/qrcode/']");
-                            return image && image.complete && image.naturalWidth >= 96;
-                        }""", timeout=15000)
-                    except Exception:
-                        pass
-                    break
             for attempt in range(3):
                 page.wait_for_timeout(800)
+                # 微信会异步切到快捷登录，每次截图前都检查；忽略组件中的隐藏模板。
+                for fr in page.frames:
+                    if fr != page.main_frame and "qrconnect" in (fr.url or ""):
+                        try:
+                            fr.wait_for_selector(
+                                "img.js_qrcode_img:visible, img.web_qrcode_img:visible, "
+                                "img[src*='/connect/qrcode/']:visible, .js_switchToNormal:visible",
+                                timeout=10000, state="visible")
+                            for switch in fr.query_selector_all(".js_switchToNormal"):
+                                if switch.is_visible():
+                                    switch.click(timeout=3000)
+                                    break
+                            fr.wait_for_function("""() => {
+                                const images = document.querySelectorAll(
+                                    "img.js_qrcode_img, img.web_qrcode_img, img[src*='/connect/qrcode/']");
+                                return [...images].some(image => image.complete && image.naturalWidth >= 96
+                                    && image.getClientRects().length > 0
+                                    && getComputedStyle(image).visibility !== 'hidden');
+                            }""", timeout=15000)
+                        except Exception:
+                            pass
+                        break
                 element = page.query_selector(ifr)
                 if (element and element.is_visible()
                         and login_qr.save_qr(element.screenshot(timeout=3000, animations="disabled"),
